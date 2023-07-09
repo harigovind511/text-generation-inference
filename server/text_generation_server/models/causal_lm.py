@@ -4,6 +4,7 @@ import inspect
 from dataclasses import dataclass
 from opentelemetry import trace
 from transformers import AutoTokenizer, AutoModelForCausalLM, PreTrainedTokenizerBase
+from peft import PeftModel, PeftConfig
 from typing import Optional, Tuple, List, Type, Dict
 
 from text_generation_server.models import Model
@@ -452,6 +453,7 @@ class CausalLM(Model):
     def __init__(
         self,
         model_id: str,
+        is_lora_model: bool = False,
         revision: Optional[str] = None,
         quantize: Optional[str] = None,
         dtype: Optional[torch.dtype] = None,
@@ -467,26 +469,55 @@ class CausalLM(Model):
             device = torch.device("cpu")
             dtype = torch.float32
 
-        tokenizer = AutoTokenizer.from_pretrained(
-            model_id,
-            revision=revision,
-            padding_side="left",
-            truncation_side="left",
-            trust_remote_code=trust_remote_code,
-        )
-        model = AutoModelForCausalLM.from_pretrained(
-            model_id,
-            revision=revision,
-            torch_dtype=dtype,
-            device_map="auto"
-            if torch.cuda.is_available() and torch.cuda.device_count() > 1
-            else None,
-            load_in_8bit=quantize == "bitsandbytes",
-            trust_remote_code=trust_remote_code,
-        )
+        # Loading Peft Config and then configuring base model
+        peft_config = None
+        model = None
+        if is_lora_model:
+            peft_config = PeftConfig.from_pretrained(model_id)
+            # Load base model
+            model = AutoModelForCausalLM.from_pretrained(
+                peft_config.base_model_name_or_path,
+                revision=revision,
+                torch_dtype=dtype,
+                device_map="auto"
+                if torch.cuda.is_available() and torch.cuda.device_count() > 1
+                else None,
+                load_in_8bit=quantize == "bitsandbytes",
+                trust_remote_code=trust_remote_code,
+            )
+            # Add the Adapter on the base model
+            # Load the Lora model
+            model = PeftModel.from_pretrained(model, model_id)
+        else:
+            model = AutoModelForCausalLM.from_pretrained(
+                model_id,
+                revision=revision,
+                torch_dtype=dtype,
+                device_map="auto"
+                if torch.cuda.is_available() and torch.cuda.device_count() > 1
+                else None,
+                load_in_8bit=quantize == "bitsandbytes",
+                trust_remote_code=trust_remote_code,
+            )
         if torch.cuda.is_available() and torch.cuda.device_count() == 1:
             model = model.cuda()
-
+        tokenizer = None
+        if is_lora_model:
+            tokenizer = AutoTokenizer.from_pretrained(
+                peft_config.base_model_name_or_path,
+                revision=revision,
+                padding_side="left",
+                truncation_side="left",
+                trust_remote_code=trust_remote_code,
+            )
+        else:
+            tokenizer = AutoTokenizer.from_pretrained(
+                model_id,
+                revision=revision,
+                padding_side="left",
+                truncation_side="left",
+                trust_remote_code=trust_remote_code,
+            )
         if tokenizer.pad_token_id is None:
             if model.config.pad_token_id is not None:
                 tokenizer.pad_token_id = model.config.pad_token_id

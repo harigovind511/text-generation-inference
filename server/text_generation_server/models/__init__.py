@@ -4,6 +4,7 @@ import torch
 from loguru import logger
 from transformers.configuration_utils import PretrainedConfig
 from transformers.models.auto import modeling_auto
+from peft import PeftConfig
 from typing import Optional
 
 from text_generation_server.models.model import Model
@@ -98,6 +99,7 @@ if FLASH_ATTENTION:
 
 def get_model(
     model_id: str,
+    is_lora_model: bool,
     revision: Optional[str],
     sharded: bool,
     quantize: Optional[str],
@@ -144,8 +146,12 @@ def get_model(
                 trust_remote_code=trust_remote_code,
             )
 
+    _model_id = model_id
+    if is_lora_model:
+        peft_config = PeftConfig.from_pretrained(model_id)
+        _model_id = peft_config.base_model_name_or_path
     config_dict, _ = PretrainedConfig.get_config_dict(
-        model_id, revision=revision, trust_remote_code=trust_remote_code
+        _model_id, revision=revision, trust_remote_code=trust_remote_code
     )
     model_type = config_dict["model_type"]
 
@@ -204,6 +210,7 @@ def get_model(
         else:
             return CausalLM(
                 model_id,
+                is_lora_model,
                 revision,
                 quantize=quantize,
                 dtype=dtype,
@@ -224,6 +231,7 @@ def get_model(
         else:
             return CausalLM(
                 model_id,
+                is_lora_model,
                 revision,
                 quantize=quantize,
                 dtype=dtype,
@@ -294,6 +302,7 @@ def get_model(
     if model_type in modeling_auto.MODEL_FOR_CAUSAL_LM_MAPPING_NAMES:
         return CausalLM(
             model_id,
+            is_lora_model,
             revision,
             quantize=quantize,
             dtype=dtype,
@@ -313,6 +322,7 @@ def get_model(
         if "AutoModelForCausalLM" in auto_map.keys():
             return CausalLM(
                 model_id,
+                is_lora_model,
                 revision,
                 quantize=quantize,
                 dtype=dtype,
